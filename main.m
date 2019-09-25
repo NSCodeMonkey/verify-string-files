@@ -7,6 +7,18 @@
 
 #import <Foundation/Foundation.h>
 
+#if !defined(var)
+#if defined(__cplusplus)
+#define var auto
+#else
+#define var __auto_type
+#endif
+#endif
+
+#if !defined(let)
+#define let const var
+#endif
+
 #pragma mark - Usage
 
 void printUsage() {
@@ -19,12 +31,12 @@ void printUsage() {
 	printf("the master .strings file's keys. Intended to be used with an Xcode\n");
 	printf("custom build step. \n\n");
 
-	printf("Usage: %s -master <strings file path>\n", processName.UTF8String);
+	printf("Usage: %s -path <strings file path>\n", processName.UTF8String);
 	printf("       %s [-warning-level <error | warning | note>] \n\n", [@"" stringByPaddingToLength:processName.length
 																					withString:@" "
 																			   startingAtIndex:0].UTF8String);
 
-	printf("  -master         The path to a valid .strings file. Should be\n");
+	printf("  -path           The path to a valid .strings file. Should be\n");
 	printf("                  localized (that is, inside an .lproj folder),\n");
 	printf("                  and what's considered the \"base\" strings file\n");
 	printf("                  for the project.\n\n");
@@ -66,10 +78,12 @@ NSDictionary *stringsFilesMatchingMasterPath(NSString *masterPath) {
 	while ((baseFileName = [enumerator nextObject])) {
 
 		NSString *baseFilePath = [basePath stringByAppendingPathComponent:baseFileName];
+#if 0
 		if ([baseFilePath caseInsensitiveCompare:masterPath] == NSOrderedSame) {
 			// Skip original file
 			continue;
 		}
+#endif
 
 		BOOL isDirectory = NO;
 		[fileManager fileExistsAtPath:baseFilePath isDirectory:&isDirectory];
@@ -124,7 +138,7 @@ NSDictionary *contentsOfStringsFile(NSString *filePath) {
 	return plist;
 }
 
-NSDictionary *otherStringsFiles(NSString *masterPath) {
+NSDictionary *allStringsFiles(NSString *masterPath) {
 
 	NSDictionary *otherStringsFilePaths = stringsFilesMatchingMasterPath(masterPath);
 	NSMutableDictionary *stringsFileContents = [NSMutableDictionary new];
@@ -144,28 +158,24 @@ NSDictionary *otherStringsFiles(NSString *masterPath) {
 	}
 }
 
-NSDictionary *checkForMissingKeys(NSDictionary *master, NSDictionary *othersByLanguage) {
+NSDictionary *checkForMissingKeys(NSDictionary<NSString*, NSDictionary*> *stringsByLanguage) {
 
-	/** Arrays of langauges missing by langauge key */
 	NSMutableDictionary *problems = [NSMutableDictionary new];
+    
+    let allKeys = [NSMutableSet set];
+    [stringsByLanguage enumerateKeysAndObjectsUsingBlock:^(NSString * _Nonnull language, NSDictionary * _Nonnull strings, BOOL * _Nonnull stop) {
+        [allKeys addObjectsFromArray:strings.allKeys];
+    }];
 
-	for	(NSString *masterKey in master) {
-
-		NSMutableArray *missingLanguages = [NSMutableArray new];
-
-		for (NSString *language in othersByLanguage) {
-
-			NSDictionary *otherStrings = othersByLanguage[language];
-			if (otherStrings[masterKey] == nil) {
-				[missingLanguages addObject:language];
-			}
-		}
-
-		if (missingLanguages.count > 0) {
-			problems[masterKey] = missingLanguages;
-		}
-
-	}
+    [stringsByLanguage enumerateKeysAndObjectsUsingBlock:^(NSString * _Nonnull language, NSDictionary * _Nonnull strings, BOOL * _Nonnull stop) {
+        let keys = [NSSet setWithArray:strings.allKeys];
+        NSMutableSet* missingKeys = [allKeys mutableCopy];
+        [missingKeys minusSet:keys];
+        
+        if (missingKeys.count > 0) {
+            problems[language] = missingKeys;
+        }
+    }];
 
 	if (problems.count > 0) {
 		return [NSDictionary dictionaryWithDictionary:problems];
@@ -236,7 +246,7 @@ int main(int argc, const char * argv[])
 
     @autoreleasepool {
 
-        NSString *inputFilePath = [[NSUserDefaults standardUserDefaults] valueForKey:@"master"];
+        NSString *inputDirPath = [[NSUserDefaults standardUserDefaults] valueForKey:@"path"];
 		NSString *warningLevel = [[NSUserDefaults standardUserDefaults] valueForKey:@"warning-level"];
 		if (warningLevel.length == 0) {
 			warningLevel = @"error";
@@ -244,21 +254,19 @@ int main(int argc, const char * argv[])
 
         setbuf(stdout, NULL);
 
-        if (inputFilePath.length == 0 || !warningLevelIsValid(warningLevel)) {
+        if (inputDirPath.length == 0 || !warningLevelIsValid(warningLevel)) {
             printUsage();
             exit(EXIT_FAILURE);
         }
 
-        if (![[NSFileManager defaultManager] fileExistsAtPath:inputFilePath]) {
-            printf("ERROR: Input file %s doesn't exist.\n", [inputFilePath UTF8String]);
+        if (![[NSFileManager defaultManager] fileExistsAtPath:inputDirPath]) {
+            printf("ERROR: Input file %s doesn't exist.\n", [inputDirPath UTF8String]);
             exit(EXIT_FAILURE);
         }
 
-		NSDictionary *masterStrings = contentsOfStringsFile(inputFilePath);
-		NSDictionary *otherStrings = otherStringsFiles(inputFilePath);
-
-		NSDictionary *missingKeys = checkForMissingKeys(masterStrings, otherStrings);
-		logMissingKeys(inputFilePath, missingKeys, warningLevel);
+		NSDictionary *allStrings = allStringsFiles(inputDirPath);
+		NSDictionary *missingKeys = checkForMissingKeys(allStrings);
+		logMissingKeys(inputDirPath, missingKeys, warningLevel);
 
         exit(EXIT_SUCCESS);
 
